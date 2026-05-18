@@ -41,8 +41,7 @@ jobs:
     - name: Run TikTok Bot Script
       run: python Program.py
 
-    - name: Upload Error Screenshot if failed
-      if: failure() # ให้ทำงานเฉพาะตอนที่สคริปต์ด้านบนรันพังเท่านั้น
+    - name: Upload Error Screenshot
       uses: actions/upload-artifact@v4
       with:
         name: bot-error-screenshot
