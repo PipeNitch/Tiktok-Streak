@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sys
 import time
 import logging
 from datetime import datetime, timezone
@@ -31,13 +32,15 @@ logging.basicConfig(
 )
 
 BASE_URL = "https://www.tiktok.com/"
-MESSAGES_URL = "https://www.tiktok.com/messages"
+# ล็อกภาษาไทยไว้เพื่อป้องกันปัญหาหน้าเว็บเปลี่ยนโครงสร้างภาษาเมื่อทำงานบน Cloud ต่างประเทศ
+MESSAGES_URL = "https://www.tiktok.com/messages?lang=th-TH"
 COOKIE_FILE = Path(__file__).with_name("cookie.txt")
 
 # ดึงค่าจากตัวแปรสภาพแวดล้อม (Environment) หรือใช้ค่าเริ่มต้นเดิมของคุณ
 TARGET_CHAT_NAME = os.getenv("TIKTOK_TARGET_CHAT_NAME", "Pm")
 MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ทดสอบระบบเติมไฟอัตโนมัติ")
-WAIT_SECONDS = 10
+# ปรับเวลาเริ่มต้นสำหรับการรอโหลดองค์ประกอบบนคลาวด์ให้ยืดหยุ่นขึ้นเป็น 30 วินาที
+WAIT_SECONDS = int(os.getenv("TIKTOK_WAIT_SECONDS", "10"))
 
 
 def load_cookie_text(path: Path) -> str:
@@ -444,31 +447,38 @@ def send_message(driver: webdriver.Chrome, message: str) -> None:
 
 def open_tiktok_with_cookies(cookies: list[dict]) -> None:
     options = Options()
-
-    # --- เริ่มการปรับแต่งสำหรับการรันบน Cloud ---
-    # สั่งให้ทำงานในโหมด Background (ไม่มีหน้าจอเบราว์เซอร์เด้งขึ้นมา)
     options.add_argument("--headless=new")
-    # ตัวเลือกความปลอดภัยที่จำเป็นสำหรับ Linux Server
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    # บังคับขนาดหน้าต่างเพื่อป้องกันการจัดวาง UI พังในหน้าจอจำลอง
     options.add_argument("--window-size=1920,1080")
-    # หลีกเลี่ยงระบบตรวจจับ Automation ในเบื้องต้น
+
+    # พลางตัวหลบระบบตรวจสอบบอทอัตโนมัติ
     options.add_argument("--disable-blink-features=AutomationControlled")
-    # ปลอมแปลง User-Agent ให้เสมือนเปิดจากหน้าต่างเบราว์เซอร์ปกติ
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
-    # --- จบการปรับแต่ง ---
 
     driver = webdriver.Chrome(options=options)
 
+    # ซ่อนค่า 'navigator.webdriver' ให้เป็น undefined
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    })
+
     try:
         wait = WebDriverWait(driver, WAIT_SECONDS)
+
+        logging.info("กำลังเข้าสู่หน้าแรก TikTok เพื่อเริ่มต้นเซสชัน...")
         driver.get(BASE_URL)
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+
+        logging.info("ทำการล้างคุกกี้ระบบเริ่มต้นเพื่อรอฝังคุกกี้ผู้ใช้...")
+        driver.delete_all_cookies()
+        time.sleep(1)
 
         added = 0
         for cookie in cookies:
@@ -484,20 +494,33 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
 
         logging.info(f"Added cookies: {added}/{len(cookies)}")
 
+        logging.info("ทำการรีเฟรชหน้าเว็บเพื่อให้คุกกี้ที่อัปเดตเริ่มทำงาน...")
+        driver.refresh()
+        time.sleep(3)
+
+        logging.info(f"กำลังย้ายไปยังกล่องข้อความ: {MESSAGES_URL}")
         driver.get(MESSAGES_URL)
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
+        logging.info(f"กำลังค้นหาและคลิกช่องแชตชื่อ: {TARGET_CHAT_NAME}")
         click_chat_by_name(driver, TARGET_CHAT_NAME)
+
+        logging.info(f"กำลังดำเนินการส่งข้อความ: '{MESSAGE_TEXT}'")
         send_message(driver, MESSAGE_TEXT)
         logging.info(f"Sent message to {TARGET_CHAT_NAME}: {MESSAGE_TEXT}")
         time.sleep(2)
     except Exception as e:
-        if 'driver' in locals():
-            driver.save_screenshot("error_screenshot.png")
         logging.error(f"Error during execution: {str(e)}", exc_info=True)
         raise e
     finally:
-        driver.quit()
+        # บังคับบันทึกรูปภาพหน้าจอล่าสุด (last_screenshot.png) ไว้เป็นหลักฐานเสมอ ไม่ว่าการรันจะรอดหรือพัง
+        if 'driver' in locals() and driver:
+            try:
+                driver.save_screenshot("last_screenshot.png")
+                logging.info("Saved final screenshot successfully.")
+            except Exception as screenshot_err:
+                logging.warning(f"Could not save final screenshot: {screenshot_err}")
+            driver.quit()
 
 
 def main() -> None:
@@ -509,6 +532,8 @@ def main() -> None:
         logging.info("Bot executed successfully.")
     except Exception as e:
         logging.critical(f"Bot failed: {str(e)}")
+        # บังคับแจ้งระบบปฏิบัติการ (รวมถึง GitHub Actions) ว่าทำงานผิดพลาด
+        sys.exit(1)
 
 
 if __name__ == "__main__":
