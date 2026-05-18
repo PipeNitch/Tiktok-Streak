@@ -42,6 +42,7 @@ jobs:
       run: python Program.py
 
     - name: Upload Error Screenshot
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: bot-error-screenshot
