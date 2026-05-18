@@ -492,6 +492,8 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
         logging.info(f"Sent message to {TARGET_CHAT_NAME}: {MESSAGE_TEXT}")
         time.sleep(2)
     except Exception as e:
+        if 'driver' in locals():
+            driver.save_screenshot("error_screenshot.png")
         logging.error(f"Error during execution: {str(e)}", exc_info=True)
         raise e
     finally:
