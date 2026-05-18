@@ -472,11 +472,11 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
     try:
         wait = WebDriverWait(driver, WAIT_SECONDS)
 
-        logging.info("กำลังเข้าสู่หน้าแรก TikTok เพื่อเริ่มต้นเซสชัน...")
+        logging.info("Starting TikTok...")
         driver.get(BASE_URL)
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
-        logging.info("ทำการล้างคุกกี้ระบบเริ่มต้นเพื่อรอฝังคุกกี้ผู้ใช้...")
+        logging.info("Deleting all cookies...")
         driver.delete_all_cookies()
         time.sleep(1)
 
@@ -494,18 +494,18 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
 
         logging.info(f"Added cookies: {added}/{len(cookies)}")
 
-        logging.info("ทำการรีเฟรชหน้าเว็บเพื่อให้คุกกี้ที่อัปเดตเริ่มทำงาน...")
+        logging.info("Refreshing webpage...")
         driver.refresh()
         time.sleep(3)
 
-        logging.info(f"กำลังย้ายไปยังกล่องข้อความ: {MESSAGES_URL}")
+        logging.info(f"Directing to message: {MESSAGES_URL}")
         driver.get(MESSAGES_URL)
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
-        logging.info(f"กำลังค้นหาและคลิกช่องแชตชื่อ: {TARGET_CHAT_NAME}")
+        logging.info(f"Looking for name: {TARGET_CHAT_NAME}")
         click_chat_by_name(driver, TARGET_CHAT_NAME)
 
-        logging.info(f"กำลังดำเนินการส่งข้อความ: '{MESSAGE_TEXT}'")
+        logging.info(f"Sending message: '{MESSAGE_TEXT}'")
         send_message(driver, MESSAGE_TEXT)
         logging.info(f"Sent message to {TARGET_CHAT_NAME}: {MESSAGE_TEXT}")
         time.sleep(2)
