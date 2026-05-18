@@ -1,0 +1,42 @@
+name: TikTok Daily Streak Bot (Windows)
+
+on:
+  schedule:
+    # ตั้งเวลารันทุกวัน (เวลาสากล UTC) 
+    # ตัวอย่าง: 01:30 UTC เท่ากับ 08:30 น. เวลาไทย
+    - cron: '30 1 * * *'
+  workflow_dispatch: # เปิดให้กดรันเองด้วยมือได้
+
+jobs:
+  run-bot:
+    # เปลี่ยนมาใช้ระบบปฏิบัติการ Windows ล่าสุดของ GitHub
+    runs-on: windows-latest
+
+    steps:
+    # ขั้นตอนที่ 1: ดึงโค้ดจากคลังของคุณลงเครื่องจำลอง
+    - name: Checkout repository code
+      uses: actions/checkout@v4
+
+    # ขั้นตอนที่ 2: ติดตั้ง Python (ระบบ Windows)
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10.11'
+
+    # ขั้นตอนที่ 3: ติดตั้งไลบรารี Selenium
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # ขั้นตอนที่ 4: สร้างไฟล์ cookie.txt จาก GitHub Secrets
+    # (ใช้ Python สั่งเขียนไฟล์โดยตรง เพื่อป้องกันปัญหาเรื่องฟอนต์ภาษาไทยและระบบ Encoding ของ Windows พัง)
+    - name: Create cookie file from secret
+      env:
+        COOKIE_DATA: ${{ secrets.TIKTOK_COOKIE }}
+      run: |
+        python -c "import os; open('cookie.txt', 'w', encoding='utf-8').write(os.environ['COOKIE_DATA'])"
+
+    # ขั้นตอนที่ 5: สั่งรันบอทส่งข้อความ TikTok
+    - name: Run TikTok Bot Script
+      run: python Program.py
