@@ -37,7 +37,7 @@ COOKIE_FILE = Path(__file__).with_name("cookie.txt")
 # ดึงค่าจากตัวแปรสภาพแวดล้อม (Environment) หรือใช้ค่าเริ่มต้นเดิมของคุณ
 TARGET_CHAT_NAME = os.getenv("TIKTOK_TARGET_CHAT_NAME", "Pm")
 MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ทดสอบระบบเติมไฟอัตโนมัติ")
-WAIT_SECONDS = 30
+WAIT_SECONDS = 10
 
 
 def load_cookie_text(path: Path) -> str:
