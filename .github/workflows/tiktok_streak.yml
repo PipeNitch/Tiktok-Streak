@@ -40,3 +40,10 @@ jobs:
     # ขั้นตอนที่ 5: สั่งรันบอทส่งข้อความ TikTok
     - name: Run TikTok Bot Script
       run: python Program.py
+
+    - name: Upload Error Screenshot if failed
+      if: failure() # ให้ทำงานเฉพาะตอนที่สคริปต์ด้านบนรันพังเท่านั้น
+      uses: actions/upload-artifact@v4
+      with:
+        name: bot-error-screenshot
+        path: error_screenshot.png
