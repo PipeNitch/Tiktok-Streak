@@ -1,0 +1,130 @@
+name: Ubuntu GUI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update apt
+        run: |
+          sudo apt update
+
+      - name: Install desktop, VNC, noVNC, and tools
+        run: |
+          sudo apt install -y \
+            xfce4 \
+            xfce4-goodies \
+            dbus-x11 \
+            tigervnc-standalone-server \
+            tigervnc-common \
+            novnc \
+            websockify \
+            curl \
+            wget \
+            git \
+            nano \
+            python3 \
+            python3-pip \
+            python3-venv \
+            unzip
+
+      - name: Install Chromium
+        run: |
+          sudo apt install -y chromium-browser chromium-chromedriver || true
+          chromium-browser --version || chromium --version || true
+          chromedriver --version || true
+
+      - name: Create cookie file from secret
+        env:
+          COOKIE_DATA: ${{ secrets.TIKTOK_COOKIE }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          if [ -n "$COOKIE_DATA" ]; then
+            python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          cookie = os.environ.get("COOKIE_DATA", "")
+          Path("cookie.txt").write_text(cookie, encoding="utf-8")
+          print("cookie.txt created")
+          print("cookie length:", len(cookie))
+          PY
+          else
+            echo "TIKTOK_COOKIE is empty or missing; skipped cookie.txt"
+          fi
+
+      - name: Create Python virtual environment
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Configure VNC
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          mkdir -p ~/.vnc
+
+          echo "$VNC_PASSWORD" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+
+          cat > ~/.vnc/xstartup <<'EOF'
+          #!/bin/bash
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          export XKL_XMODMAP_DISABLE=1
+          startxfce4 &
+          EOF
+
+          chmod +x ~/.vnc/xstartup
+
+      - name: Start VNC desktop
+        run: |
+          vncserver :1 -geometry 1365x768 -depth 24
+          sleep 3
+          vncserver -list
+
+      - name: Start noVNC
+        run: |
+          nohup websockify --web=/usr/share/novnc/ 6080 localhost:5901 > novnc.log 2>&1 &
+          sleep 3
+          cat novnc.log || true
+
+      - name: Install ngrok
+        run: |
+          curl -sSL "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz" -o ngrok.tgz
+          tar -xzf ngrok.tgz
+          sudo mv ngrok /usr/local/bin/ngrok
+          rm ngrok.tgz
+          ngrok version
+
+      - name: Configure ngrok
+        env:
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+        run: |
+          ngrok config add-authtoken "$NGROK_TOKEN"
+
+      - name: Start ngrok tunnel to GUI
+        env:
+          NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
+        run: |
+          echo "Starting GUI tunnel..."
+          echo "Open this after tunnel starts:"
+          echo "https://$NGROK_DOMAIN/vnc.html"
+
+          if [ -n "$NGROK_DOMAIN" ]; then
+            ngrok http --domain="$NGROK_DOMAIN" 6080 --log=stdout
+          else
+            ngrok http 6080 --log=stdout
+          fi
