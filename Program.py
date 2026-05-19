@@ -31,9 +31,9 @@ logging.basicConfig(
     ]
 )
 
-BASE_URL = "https://www.tiktok.com/"
+BASE_URL = "https://www.tiktok.com/messages"
 # ล็อกภาษาไทยไว้เพื่อป้องกันปัญหาหน้าเว็บเปลี่ยนโครงสร้างภาษาเมื่อทำงานบน Cloud ต่างประเทศ
-MESSAGES_URL = "https://www.tiktok.com/messages?lang=th-TH"
+MESSAGES_URL = "https://www.tiktok.com/messages"
 COOKIE_FILE = Path(__file__).with_name("cookie.txt")
 
 # ดึงค่าจากตัวแปรสภาพแวดล้อม (Environment) หรือใช้ค่าเริ่มต้นเดิมของคุณ
