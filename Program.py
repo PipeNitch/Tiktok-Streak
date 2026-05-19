@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,7 +21,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-# ตั้งค่า Logging สำหรับบันทึกสถานะการทำงานลงไฟล์และแสดงผลที่ Terminal
 LOG_FILE = Path(__file__).with_name("tiktok_bot.log")
 logging.basicConfig(
     level=logging.INFO,
@@ -32,14 +32,11 @@ logging.basicConfig(
 )
 
 BASE_URL = "https://www.tiktok.com/messages"
-# ล็อกภาษาไทยไว้เพื่อป้องกันปัญหาหน้าเว็บเปลี่ยนโครงสร้างภาษาเมื่อทำงานบน Cloud ต่างประเทศ
 MESSAGES_URL = "https://www.tiktok.com/messages"
 COOKIE_FILE = Path(__file__).with_name("cookie.txt")
 
-# ดึงค่าจากตัวแปรสภาพแวดล้อม (Environment) หรือใช้ค่าเริ่มต้นเดิมของคุณ
 TARGET_CHAT_NAME = os.getenv("TIKTOK_TARGET_CHAT_NAME", "Pm")
 MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ทดสอบระบบเติมไฟอัตโนมัติ")
-# ปรับเวลาเริ่มต้นสำหรับการรอโหลดองค์ประกอบบนคลาวด์ให้ยืดหยุ่นขึ้นเป็น 30 วินาที
 WAIT_SECONDS = int(os.getenv("TIKTOK_WAIT_SECONDS", "10"))
 
 
@@ -49,9 +46,7 @@ def load_cookie_text(path: Path) -> str:
 
     text = path.read_text(encoding="utf-8").strip()
     if not text:
-        raise ValueError(
-            "cookie.txt is empty. Paste cookies first, for example: sessionid=...; sid_tt=..."
-        )
+        raise ValueError("cookie.txt is empty. Paste cookies first, for example: sessionid=...; sid_tt=...")
 
     return text
 
@@ -373,8 +368,8 @@ def element_text_and_labels(element) -> str:
 
 def is_upload_or_attach_button(element) -> bool:
     if element.find_elements(
-            By.XPATH,
-            ".//input[@type='file'] | ./ancestor-or-self::label[.//input[@type='file']]",
+        By.XPATH,
+        ".//input[@type='file'] | ./ancestor-or-self::label[.//input[@type='file']]",
     ):
         return True
 
@@ -445,7 +440,26 @@ def send_message(driver: webdriver.Chrome, message: str) -> None:
         click_send_button_if_available(driver)
 
 
+def quit_driver(driver: webdriver.Chrome | None) -> None:
+    if not driver:
+        return
+
+    def shutdown():
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=shutdown, daemon=True)
+    thread.start()
+    thread.join(timeout=8)
+
+    if thread.is_alive():
+        logging.warning("driver.quit() timed out; continuing shutdown")
+
+
 def open_tiktok_with_cookies(cookies: list[dict]) -> None:
+    driver = None
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -453,23 +467,21 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
 
-    # พลางตัวหลบระบบตรวจสอบบอทอัตโนมัติ
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
+    options.add_experimental_option("useAutomationExtension", False)
     options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
-    driver = webdriver.Chrome(options=options)
-
-    # ซ่อนค่า 'navigator.webdriver' ให้เป็น undefined
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    })
-
     try:
+        driver = webdriver.Chrome(options=options)
+
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        })
+
         wait = WebDriverWait(driver, WAIT_SECONDS)
 
         logging.info("Starting TikTok...")
@@ -515,31 +527,35 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
         send_message(driver, MESSAGE_TEXT)
         logging.info(f"Sent message to {TARGET_CHAT_NAME}: {MESSAGE_TEXT}")
         time.sleep(2)
+
     except Exception as e:
         logging.error(f"Error during execution: {str(e)}", exc_info=True)
-        raise e
+        raise
+
     finally:
-        if 'driver' in locals() and driver:
+        if driver:
             try:
                 driver.save_screenshot("final_screenshot.png")
                 logging.info("Saved final screenshot successfully.")
             except Exception as screenshot_err:
                 logging.warning(f"Could not save final screenshot: {screenshot_err}")
-            driver.quit()
+
+            quit_driver(driver)
 
 
-def main() -> None:
+def main() -> int:
     logging.info("Starting TikTok Automation Bot...")
+
     try:
         cookie_text = load_cookie_text(COOKIE_FILE)
         cookies = parse_cookies(cookie_text)
         open_tiktok_with_cookies(cookies)
         logging.info("Bot executed successfully.")
+        return 0
     except Exception as e:
         logging.critical(f"Bot failed: {str(e)}")
-        # บังคับแจ้งระบบปฏิบัติการ (รวมถึง GitHub Actions) ว่าทำงานผิดพลาด
-        sys.exit(1)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
