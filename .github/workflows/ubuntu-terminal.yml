@@ -1,0 +1,63 @@
+name: Ubuntu Web Terminal
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terminal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update apt
+        run: |
+          sudo apt update
+
+      - name: Install basic tools
+        run: |
+          sudo apt install -y curl wget tar gzip git python3 python3-pip python3-venv nano
+
+      - name: Install GoTTY
+        run: |
+          curl -sSL "https://github.com/yudai/gotty/releases/download/v1.0.1/gotty_linux_amd64.tar.gz" -o gotty.tar.gz
+          tar -xzf gotty.tar.gz
+          sudo mv gotty /usr/local/bin/gotty
+          rm gotty.tar.gz
+          gotty --version || true
+
+      - name: Install ngrok
+        run: |
+          curl -sSL "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz" -o ngrok.tgz
+          tar -xzf ngrok.tgz
+          sudo mv ngrok /usr/local/bin/ngrok
+          rm ngrok.tgz
+          ngrok version
+
+      - name: Configure ngrok
+        env:
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+        run: |
+          ngrok config add-authtoken "$NGROK_TOKEN"
+
+      - name: Start GoTTY web terminal
+        env:
+          GOTTY_USER: ${{ secrets.GOTTY_USER }}
+          GOTTY_PASSWORD: ${{ secrets.GOTTY_PASSWORD }}
+        run: |
+          export TERM=xterm
+          nohup gotty -w --credential "$GOTTY_USER:$GOTTY_PASSWORD" --port 8080 /bin/bash > gotty.log 2>&1 &
+          sleep 3
+          cat gotty.log || true
+
+      - name: Start ngrok tunnel
+        env:
+          NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
+        run: |
+          if [ -n "$NGROK_DOMAIN" ]; then
+            ngrok http --domain="$NGROK_DOMAIN" 8080
+          else
+            ngrok http 8080
+          fi

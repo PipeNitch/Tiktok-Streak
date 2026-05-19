@@ -490,7 +490,13 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
                 driver.add_cookie(cookie)
                 added += 1
             except (InvalidCookieDomainException, WebDriverException) as exc:
-                logging.debug(f"Skipped cookie {cookie.get('name')}: {exc}")
+                logging.warning(
+                    "Skipped cookie name=%s domain=%s path=%s reason=%s",
+                    cookie.get("name"),
+                    cookie.get("domain"),
+                    cookie.get("path"),
+                    exc,
+                )
 
         logging.info(f"Added cookies: {added}/{len(cookies)}")
 
