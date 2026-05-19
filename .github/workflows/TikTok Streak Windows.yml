@@ -1,9 +1,9 @@
 name: TikTok Daily Streak Bot (Windows)
 
 on:
-  schedule:
+  # schedule:
     # ตัวอย่าง: 01:30 UTC เท่ากับ 08:30 น. เวลาไทย
-    - cron: '11 9 * * *'
+    # - cron: '30 1 * * *
   workflow_dispatch: # เปิดให้กดรันเองด้วยมือได้
 
 jobs:
