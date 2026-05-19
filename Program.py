@@ -36,7 +36,7 @@ MESSAGES_URL = "https://www.tiktok.com/messages"
 COOKIE_FILE = Path(__file__).with_name("cookie.txt")
 
 TARGET_CHAT_NAME = os.getenv("TIKTOK_TARGET_CHAT_NAME", "Pm")
-MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ทดสอบระบบเติมไฟอัตโนมัติ")
+MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ทดสอบระบบเติมไฟอัตโนมัติ🔥")
 WAIT_SECONDS = int(os.getenv("TIKTOK_WAIT_SECONDS", "10"))
 
 
@@ -422,22 +422,69 @@ def click_send_button_if_available(driver: webdriver.Chrome) -> bool:
     return False
 
 
+def set_message_text(driver: webdriver.Chrome, element, message: str) -> None:
+    driver.execute_script(
+        """
+        const editor = arguments[0];
+        const text = arguments[1];
+
+        if (!editor) {
+            throw new Error("Editor not found");
+        }
+
+        const block =
+            editor.querySelector(".public-DraftStyleDefault-block") ||
+            editor.querySelector("[data-block='true']") ||
+            editor;
+
+        if (!block) {
+            throw new Error("Draft block not found");
+        }
+
+        block.innerHTML = "";
+
+        const span = document.createElement("span");
+        span.setAttribute(
+            "data-offset-key",
+            block.getAttribute("data-offset-key") || "selenium-0-0"
+        );
+        span.textContent = text;
+
+        block.appendChild(span);
+
+        editor.focus();
+
+        editor.dispatchEvent(
+            new InputEvent("input", {
+                bubbles: true,
+                inputType: "insertText",
+                data: text,
+            })
+        );
+
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
+        """,
+        element,
+        message,
+    )
+
+
 def send_message(driver: webdriver.Chrome, message: str) -> None:
     message_box = find_message_box(driver)
     click_element(driver, message_box)
-    message_box.send_keys(message)
+
+    logging.info("Setting message text using JavaScript.")
+    set_message_text(driver, message_box, message)
     time.sleep(1)
 
-    message_box.send_keys(Keys.ENTER)
-    time.sleep(1)
-
-    try:
-        remaining_text = message_box.text.strip()
-    except WebDriverException:
+    if click_send_button_if_available(driver):
+        logging.info("Clicked send button.")
+        time.sleep(2)
         return
 
-    if remaining_text:
-        click_send_button_if_available(driver)
+    logging.warning("Send button not found, trying Enter key.")
+    message_box.send_keys(Keys.ENTER)
+    time.sleep(2)
 
 
 def quit_driver(driver: webdriver.Chrome | None) -> None:
