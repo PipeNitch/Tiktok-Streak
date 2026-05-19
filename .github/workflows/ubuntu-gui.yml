@@ -12,16 +12,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Update apt
+      - name: Install desktop, VNC, noVNC, Chromium, and tools
         run: |
           sudo apt update
-
-      - name: Install desktop, VNC, noVNC, and tools
-        run: |
-          sudo apt install -y \
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
             xfce4 \
             xfce4-goodies \
             dbus-x11 \
+            xterm \
             tigervnc-standalone-server \
             tigervnc-common \
             novnc \
@@ -33,11 +31,10 @@ jobs:
             python3 \
             python3-pip \
             python3-venv \
-            unzip
+            unzip \
+            chromium-browser \
+            chromium-chromedriver
 
-      - name: Install Chromium
-        run: |
-          sudo apt install -y chromium-browser chromium-chromedriver || true
           chromium-browser --version || chromium --version || true
           chromedriver --version || true
 
@@ -46,6 +43,7 @@ jobs:
           COOKIE_DATA: ${{ secrets.TIKTOK_COOKIE }}
         run: |
           cd "$GITHUB_WORKSPACE"
+
           if [ -n "$COOKIE_DATA" ]; then
             python3 - <<'PY'
           import os
@@ -66,8 +64,11 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install --upgrade pip
+
           if [ -f requirements.txt ]; then
             pip install -r requirements.txt
+          else
+            pip install selenium
           fi
 
       - name: Configure VNC
@@ -76,29 +77,52 @@ jobs:
         run: |
           mkdir -p ~/.vnc
 
+          if [ -z "$VNC_PASSWORD" ]; then
+            echo "VNC_PASSWORD secret is missing"
+            exit 1
+          fi
+
           echo "$VNC_PASSWORD" | vncpasswd -f > ~/.vnc/passwd
           chmod 600 ~/.vnc/passwd
 
           cat > ~/.vnc/xstartup <<'EOF'
-          #!/bin/bash
+          #!/bin/sh
           unset SESSION_MANAGER
           unset DBUS_SESSION_BUS_ADDRESS
+
+          [ -r "$HOME/.Xresources" ] && xrdb "$HOME/.Xresources"
+
           export XKL_XMODMAP_DISABLE=1
-          startxfce4 &
+          export DESKTOP_SESSION=xfce
+          export XDG_CURRENT_DESKTOP=XFCE
+          export XDG_SESSION_DESKTOP=xfce
+
+          dbus-launch --exit-with-session startxfce4
           EOF
 
           chmod +x ~/.vnc/xstartup
+          cat ~/.vnc/xstartup
 
       - name: Start VNC desktop
         run: |
-          vncserver :1 -geometry 1365x768 -depth 24
-          sleep 3
+          vncserver -kill :1 || true
+          rm -f /tmp/.X1-lock
+          rm -rf /tmp/.X11-unix/X1
+
+          vncserver :1 -geometry 1365x768 -depth 24 -localhost yes
+
+          sleep 5
           vncserver -list
+
+          echo "===== VNC log ====="
+          cat ~/.vnc/*.log || true
 
       - name: Start noVNC
         run: |
           nohup websockify --web=/usr/share/novnc/ 6080 localhost:5901 > novnc.log 2>&1 &
           sleep 3
+
+          echo "===== noVNC log ====="
           cat novnc.log || true
 
       - name: Install ngrok
@@ -113,18 +137,18 @@ jobs:
         env:
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
         run: |
+          if [ -z "$NGROK_TOKEN" ]; then
+            echo "NGROK_TOKEN secret is missing"
+            exit 1
+          fi
+
           ngrok config add-authtoken "$NGROK_TOKEN"
 
       - name: Start ngrok tunnel to GUI
-        env:
-          NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
         run: |
           echo "Starting GUI tunnel..."
-          echo "Open this after tunnel starts:"
-          echo "https://$NGROK_DOMAIN/vnc.html"
+          echo "Look for the ngrok public URL below."
+          echo "Then open:"
+          echo "https://YOUR_NGROK_URL/vnc.html"
 
-          if [ -n "$NGROK_DOMAIN" ]; then
-            ngrok http --domain="$NGROK_DOMAIN" 6080 --log=stdout
-          else
-            ngrok http 6080 --log=stdout
-          fi
+          ngrok http 6080 --log=stdout
