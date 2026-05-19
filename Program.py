@@ -521,7 +521,7 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
     finally:
         if 'driver' in locals() and driver:
             try:
-                driver.save_screenshot("error_screenshot.png")
+                driver.save_screenshot("final_screenshot.png")
                 logging.info("Saved final screenshot successfully.")
             except Exception as screenshot_err:
                 logging.warning(f"Could not save final screenshot: {screenshot_err}")
