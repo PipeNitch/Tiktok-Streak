@@ -2,7 +2,7 @@ name: TikTok Daily Streak (Ubuntu)
 
 on:
   schedule:
-    - cron: "30 9 * * *"
+    - cron: "0 10 * * *"
   workflow_dispatch:
 
 jobs:
