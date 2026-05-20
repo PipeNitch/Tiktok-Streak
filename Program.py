@@ -5,7 +5,11 @@ import sys
 import time
 import logging
 import threading
-from datetime import datetime, timezone
+import urllib.parse
+import urllib.request
+import uuid
+import mimetypes
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from selenium import webdriver
@@ -21,7 +25,37 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+DEBUG_MODE = 0
+
+MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ข้ามาเติมไฟ🔥")
+WAIT_SECONDS = int(os.getenv("TIKTOK_WAIT_SECONDS", "10"))
+
+ENABLE_NOTIFY = 1
+DISCORD_WEBHOOK_FILE = Path(__file__).with_name("discord_webhook.txt")
+TELEGRAM_BOT_TOKEN_FILE = Path(__file__).with_name("telegram_bot_token.txt")
+TELEGRAM_CHAT_ID_FILE = Path(__file__).with_name("telegram_chat_id.txt")
+
+WAIT_UNTIL_TARGET_TIME = 1
+PRECHECK_BEFORE_WAIT = 1
+
+PRECHECK_INTERVAL_MINUTES = 10
+PRECHECK_STOP_WITHIN_MINUTES = 15
+
+TARGET_RUN_TIME = "06:00"
+TARGET_TIMEZONE = timezone(timedelta(hours=7), name="Asia/Bangkok")
+
+BASE_URL = "https://www.tiktok.com/messages/?lang=en"
+MESSAGES_URL = "https://www.tiktok.com/messages/?lang=en"
+COOKIE_FILE = Path(__file__).with_name("cookie.txt")
 LOG_FILE = Path(__file__).with_name("tiktok_bot.log")
+
+DISCORD_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/51.0.2704.103 Safari/537.36"
+)
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -30,14 +64,6 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
-BASE_URL = "https://www.tiktok.com/messages"
-MESSAGES_URL = "https://www.tiktok.com/messages"
-COOKIE_FILE = Path(__file__).with_name("cookie.txt")
-
-TARGET_CHAT_NAME = os.getenv("TIKTOK_TARGET_CHAT_NAME", "Pm")
-MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ทดสอบระบบเติมไฟอัตโนมัติ🔥")
-WAIT_SECONDS = int(os.getenv("TIKTOK_WAIT_SECONDS", "10"))
 
 
 def load_cookie_text(path: Path) -> str:
@@ -48,6 +74,14 @@ def load_cookie_text(path: Path) -> str:
     if not text:
         raise ValueError("cookie.txt is empty. Paste cookies first, for example: sessionid=...; sid_tt=...")
 
+    return text
+
+
+def load_optional_secret_text(path: Path) -> str:
+    if not path.exists():
+        return ""
+
+    text = path.read_text(encoding="utf-8").strip()
     return text
 
 
@@ -256,17 +290,6 @@ def parse_cookies(text: str) -> list[dict]:
         return parse_header_cookies(text)
 
 
-def xpath_text_contains(text: str) -> str:
-    lower_text = text.lower()
-    return (
-        "//*[not(self::script) and not(self::style)"
-        " and string-length(normalize-space(.)) <= 180"
-        " and contains(translate(normalize-space(.),"
-        " 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'),"
-        f" '{lower_text}')]"
-    )
-
-
 def click_element(driver: webdriver.Chrome, element) -> None:
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
     time.sleep(0.3)
@@ -274,16 +297,6 @@ def click_element(driver: webdriver.Chrome, element) -> None:
         element.click()
     except WebDriverException:
         driver.execute_script("arguments[0].click();", element)
-
-
-def clickable_parent(element):
-    try:
-        return element.find_element(
-            By.XPATH,
-            "./ancestor-or-self::*[self::button or self::a or @role='button' or @tabindex][1]",
-        )
-    except NoSuchElementException:
-        return element
 
 
 def find_visible_elements(driver: webdriver.Chrome, xpath: str) -> list:
@@ -294,43 +307,124 @@ def find_visible_elements(driver: webdriver.Chrome, xpath: str) -> list:
     ]
 
 
-def click_chat_by_name(driver: webdriver.Chrome, chat_name: str) -> None:
-    wait = WebDriverWait(driver, WAIT_SECONDS)
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+def get_target_conversations(driver: webdriver.Chrome) -> list[dict]:
+    targets = driver.execute_script(
+        """
+        const items = [...document.querySelectorAll('[data-e2e="dm-new-conversation-item"]')]
+            .filter(el => String(el.className).includes("css-1b0rjvj"));
 
-    search_box_xpaths = [
-        "//input[contains(translate(@placeholder, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'search')]",
-        "//input[contains(@placeholder, 'ค้นหา')]",
-        "//*[@role='search']//input",
-    ]
+        return items
+            .map((el, index) => {
+                const nameEl = el.querySelector('[data-e2e="dm-new-conversation-nickname"]');
+                return {
+                    index,
+                    id: el.id || "",
+                    name: nameEl ? nameEl.textContent.trim() : ""
+                };
+            })
+            .filter(item => item.name);
+        """
+    )
 
-    end_time = time.time() + WAIT_SECONDS
-    searched = False
-    chat_xpath = xpath_text_contains(chat_name)
+    return targets or []
 
-    while time.time() < end_time:
-        for element in find_visible_elements(driver, chat_xpath):
-            click_element(driver, clickable_parent(element))
-            time.sleep(2)
-            return
 
-        if not searched:
-            for search_xpath in search_box_xpaths:
-                search_boxes = find_visible_elements(driver, search_xpath)
-                if not search_boxes:
-                    continue
+def color_text(text: str, color_code: str) -> str:
+    return f"\033[{color_code}m{text}\033[0m"
 
-                search_box = search_boxes[0]
-                click_element(driver, search_box)
-                search_box.send_keys(Keys.CONTROL, "a")
-                search_box.send_keys(chat_name)
-                searched = True
-                time.sleep(2)
-                break
 
-        time.sleep(1)
+def log_collected_targets(targets: list[dict]) -> None:
+    logging.info("Collected target count: %s", len(targets))
 
-    raise TimeoutException(f"Could not find chat name: {chat_name}")
+    print("")
+    print(color_text("Collected targets:", "96;1"))
+    print(color_text("------------------", "90"))
+
+    for index, target in enumerate(targets, start=1):
+        name = target.get("name", "")
+        target_id = target.get("id", "")
+        target_index = target.get("index", "")
+
+        logging.info(
+            "Target %s: name=%s id=%s index=%s",
+            index,
+            name,
+            target_id,
+            target_index,
+        )
+
+        number_part = color_text(f"{index}.", "93;1")
+        name_part = color_text(name, "92;1")
+        id_part = color_text(f"id={target_id}", "94")
+        index_part = color_text(f"index={target_index}", "95")
+
+        print(f"{number_part} {name_part} | {id_part} | {index_part}")
+
+    print(color_text("------------------", "90"))
+    print("")
+
+
+def click_chat_by_target(driver: webdriver.Chrome, target: dict) -> None:
+    target_id = target.get("id", "")
+    target_name = target.get("name", "")
+
+    clicked = driver.execute_script(
+        """
+        const targetId = arguments[0];
+        const targetName = arguments[1];
+
+        const items = [...document.querySelectorAll('[data-e2e="dm-new-conversation-item"]')]
+            .filter(el => String(el.className).includes("css-1b0rjvj"));
+
+        let item = null;
+
+        if (targetId) {
+            item = items.find(el => el.id === targetId);
+        }
+
+        if (!item && targetName) {
+            item = items.find(el => {
+                const nameEl = el.querySelector('[data-e2e="dm-new-conversation-nickname"]');
+                return nameEl && nameEl.textContent.trim() === targetName;
+            });
+        }
+
+        if (!item) {
+            return false;
+        }
+
+        item.scrollIntoView({ block: "center" });
+
+        item.dispatchEvent(new MouseEvent("mouseover", {
+            bubbles: true,
+            cancelable: true,
+            view: window
+        }));
+
+        item.dispatchEvent(new MouseEvent("mousedown", {
+            bubbles: true,
+            cancelable: true,
+            view: window
+        }));
+
+        item.dispatchEvent(new MouseEvent("mouseup", {
+            bubbles: true,
+            cancelable: true,
+            view: window
+        }));
+
+        item.click();
+
+        return true;
+        """,
+        target_id,
+        target_name,
+    )
+
+    if not clicked:
+        raise TimeoutException(f"Could not click target chat: {target_name}")
+
+    time.sleep(2)
 
 
 def find_message_box(driver: webdriver.Chrome):
@@ -383,14 +477,6 @@ def is_upload_or_attach_button(element) -> bool:
         "photo",
         "video",
         "media",
-        "อัปโหลด",
-        "อัพโหลด",
-        "แนบ",
-        "ไฟล์",
-        "รูป",
-        "ภาพ",
-        "วิดีโอ",
-        "สื่อ",
     )
     return any(term in label_text for term in blocked_terms)
 
@@ -400,7 +486,7 @@ def is_send_button(element) -> bool:
         return False
 
     label_text = element_text_and_labels(element)
-    send_terms = ("message-send", "send", "ส่ง")
+    send_terms = ("message-send", "send")
     return any(term in label_text for term in send_terms)
 
 
@@ -409,8 +495,6 @@ def click_send_button_if_available(driver: webdriver.Chrome) -> bool:
         "//*[@data-e2e='message-send' and not(@disabled)]",
         "//button[not(@disabled) and contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'send')]",
         "//*[@role='button' and not(@aria-disabled='true') and contains(translate(@aria-label, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'send')]",
-        "//button[not(@disabled) and contains(@aria-label, 'ส่ง')]",
-        "//*[@role='button' and not(@aria-disabled='true') and contains(@aria-label, 'ส่ง')]",
     ]
 
     for xpath in send_xpaths:
@@ -505,6 +589,121 @@ def quit_driver(driver: webdriver.Chrome | None) -> None:
         logging.warning("driver.quit() timed out; continuing shutdown")
 
 
+def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -> list[dict]:
+    if PRECHECK_BEFORE_WAIT != 1:
+        logging.info("PRECHECK_BEFORE_WAIT=0, cookie precheck skipped.")
+        return []
+
+    driver = None
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    try:
+        logging.info("Starting TikTok cookie precheck...")
+        driver = webdriver.Chrome(options=options)
+
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        })
+
+        wait = WebDriverWait(driver, WAIT_SECONDS)
+
+        driver.get(BASE_URL)
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+
+        driver.delete_all_cookies()
+        time.sleep(1)
+
+        added = 0
+        for cookie in cookies:
+            if cookie.get("expiry") and cookie["expiry"] <= int(time.time()):
+                logging.warning(f"Precheck skipped expired cookie {cookie.get('name')}")
+                continue
+
+            try:
+                driver.add_cookie(cookie)
+                added += 1
+            except (InvalidCookieDomainException, WebDriverException) as exc:
+                logging.warning(
+                    "Precheck skipped cookie name=%s domain=%s path=%s reason=%s",
+                    cookie.get("name"),
+                    cookie.get("domain"),
+                    cookie.get("path"),
+                    exc,
+                )
+
+        logging.info("Precheck added cookies: %s/%s", added, len(cookies))
+
+        driver.refresh()
+        time.sleep(3)
+
+        logging.info("Precheck directing to messages page...")
+        driver.get(MESSAGES_URL)
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+
+        logging.info("Precheck waiting 10 seconds for conversations to load...")
+        time.sleep(10)
+
+        logging.info("Precheck collecting target conversations...")
+        targets = get_target_conversations(driver)
+
+        if not targets:
+            screenshot_path = "precheck_no_targets.png"
+
+            try:
+                driver.save_screenshot(screenshot_path)
+                logging.info("Saved precheck_no_targets.png")
+            except Exception as screenshot_err:
+                logging.warning(f"Could not save precheck screenshot: {screenshot_err}")
+
+            notify(
+                "❌ TikTok cookie problem\n"
+                "Could not find any target conversations.\n"
+                "The session may be logged out or the cookie may be invalid.",
+                screenshot_path,
+            )
+
+            raise RuntimeError("Cookie precheck failed: no target conversations found")
+
+        logging.info("Cookie precheck passed. Target count: %s", len(targets))
+
+        if notify_success:
+            notify(
+                "✅ First TikTok precheck passed\n"
+                f"Targets: {len(targets)}"
+            )
+
+        if DEBUG_MODE == 1:
+            log_collected_targets(targets)
+
+        try:
+            driver.save_screenshot("precheck_success.png")
+            logging.info("Saved precheck_success.png")
+        except Exception as screenshot_err:
+            logging.warning(f"Could not save precheck screenshot: {screenshot_err}")
+
+        return targets
+
+    except Exception as e:
+        logging.error(f"Precheck failed: {str(e)}", exc_info=True)
+        raise
+
+    finally:
+        if driver:
+            quit_driver(driver)
+
+
 def open_tiktok_with_cookies(cookies: list[dict]) -> None:
     driver = None
     options = Options()
@@ -567,13 +766,64 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
         driver.get(MESSAGES_URL)
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
-        logging.info(f"Looking for name: {TARGET_CHAT_NAME}")
-        click_chat_by_name(driver, TARGET_CHAT_NAME)
+        logging.info("Waiting 10 seconds for conversations to load...")
+        time.sleep(10)
 
-        logging.info(f"Sending message: '{MESSAGE_TEXT}'")
-        send_message(driver, MESSAGE_TEXT)
-        logging.info(f"Sent message to {TARGET_CHAT_NAME}: {MESSAGE_TEXT}")
-        time.sleep(2)
+        logging.info("Collecting target conversations...")
+        targets = get_target_conversations(driver)
+
+        if not targets:
+            screenshot_path = "no_targets_final.png"
+
+            try:
+                driver.save_screenshot(screenshot_path)
+                logging.info("Saved no_targets_final.png")
+            except Exception as screenshot_err:
+                logging.warning(f"Could not save no target screenshot: {screenshot_err}")
+
+            notify(
+                "❌ TikTok cookie problem\n"
+                "Could not find any target conversations during the final run.\n"
+                "The session may be logged out or the cookie may be invalid.",
+                screenshot_path,
+            )
+
+            raise TimeoutException("No target conversations found")
+
+        if DEBUG_MODE == 1:
+            log_collected_targets(targets)
+
+            target_names = ", ".join(target.get("name", "") for target in targets)
+
+            notify(
+                "Target collection succeeded.\n"
+                f"Targets: {len(targets)}\n"
+                f"Names: {target_names}"
+            )
+
+            logging.info("DEBUG_MODE=1, message sending skipped.")
+            print("DEBUG_MODE=1, message sending skipped.")
+            return
+
+        for index, target in enumerate(targets, start=1):
+            logging.info(
+                "Opening target conversation %s/%s: %s",
+                index,
+                len(targets),
+                target["name"],
+            )
+
+            driver.get(MESSAGES_URL)
+            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+            time.sleep(2)
+
+            click_chat_by_target(driver, target)
+
+            logging.info("Sending message to %s: '%s'", target["name"], MESSAGE_TEXT)
+            send_message(driver, MESSAGE_TEXT)
+            logging.info("Sent message to %s", target["name"])
+
+            time.sleep(2)
 
     except Exception as e:
         logging.error(f"Error during execution: {str(e)}", exc_info=True)
@@ -590,15 +840,351 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
             quit_driver(driver)
 
 
+def get_target_datetime() -> datetime:
+    parts = TARGET_RUN_TIME.split(":")
+
+    if len(parts) == 2:
+        target_hour = int(parts[0])
+        target_minute = int(parts[1])
+        target_second = 0
+    elif len(parts) == 3:
+        target_hour = int(parts[0])
+        target_minute = int(parts[1])
+        target_second = int(parts[2])
+    else:
+        raise ValueError(f"Invalid TARGET_RUN_TIME format: {TARGET_RUN_TIME}. Use HH:MM or HH:MM:SS")
+
+    now = datetime.now(TARGET_TIMEZONE)
+
+    return now.replace(
+        hour=target_hour,
+        minute=target_minute,
+        second=target_second,
+        microsecond=0,
+    )
+
+
+def precheck_until_near_target_time(cookies: list[dict]) -> None:
+    if PRECHECK_BEFORE_WAIT != 1:
+        logging.info("PRECHECK_BEFORE_WAIT=0, periodic precheck skipped.")
+        return
+
+    if WAIT_UNTIL_TARGET_TIME != 1:
+        logging.info("WAIT_UNTIL_TARGET_TIME=0, skipping precheck and starting immediately.")
+        return
+
+    interval_seconds = PRECHECK_INTERVAL_MINUTES * 60
+    stop_within_seconds = PRECHECK_STOP_WITHIN_MINUTES * 60
+
+    first_precheck_start = datetime.now(TARGET_TIMEZONE)
+    precheck_round = 0
+
+    while True:
+        now = datetime.now(TARGET_TIMEZONE)
+        target = get_target_datetime()
+        remaining_seconds = int((target - now).total_seconds())
+
+        if remaining_seconds <= 0:
+            logging.info(
+                "Target time already passed before precheck loop. Now=%s Target=%s. Starting immediately.",
+                now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                target.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            )
+            return
+
+        if remaining_seconds <= stop_within_seconds:
+            logging.info(
+                "Target time is near. Remaining=%s seconds, stop precheck threshold=%s seconds. Skipping further precheck.",
+                remaining_seconds,
+                stop_within_seconds,
+            )
+            return
+
+        precheck_round += 1
+        precheck_start = datetime.now(TARGET_TIMEZONE)
+
+        logging.info(
+            "Running periodic precheck round %s. Now=%s Target=%s Remaining=%s seconds.",
+            precheck_round,
+            precheck_start.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            target.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            remaining_seconds,
+        )
+
+        precheck_tiktok_cookies(cookies, notify_success=(precheck_round == 1))
+
+        precheck_end = datetime.now(TARGET_TIMEZONE)
+        precheck_duration_seconds = int((precheck_end - precheck_start).total_seconds())
+
+        now = precheck_end
+        target = get_target_datetime()
+        remaining_seconds = int((target - now).total_seconds())
+
+        logging.info(
+            "Precheck round %s passed. Duration=%s seconds. Remaining=%s seconds.",
+            precheck_round,
+            precheck_duration_seconds,
+            remaining_seconds,
+        )
+
+        if remaining_seconds <= stop_within_seconds:
+            logging.info(
+                "Target time is now near. Remaining=%s seconds. Waiting for target time.",
+                remaining_seconds,
+            )
+            return
+
+        next_precheck_time = first_precheck_start + timedelta(
+            seconds=precheck_round * interval_seconds
+        )
+
+        latest_allowed_precheck_time = target - timedelta(seconds=stop_within_seconds)
+
+        if next_precheck_time > latest_allowed_precheck_time:
+            logging.info(
+                "Next precheck time would be too close to target. Next=%s LatestAllowed=%s. Waiting for target time.",
+                next_precheck_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                latest_allowed_precheck_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            )
+            return
+
+        sleep_seconds = int((next_precheck_time - datetime.now(TARGET_TIMEZONE)).total_seconds())
+
+        if sleep_seconds <= 0:
+            logging.info(
+                "Next precheck time already reached or passed. Continuing immediately."
+            )
+            continue
+
+        logging.info(
+            "Sleeping %s seconds until next fixed precheck time: %s",
+            sleep_seconds,
+            next_precheck_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        )
+
+        time.sleep(sleep_seconds)
+
+
+def wait_until_scheduled_time() -> None:
+    if WAIT_UNTIL_TARGET_TIME != 1:
+        logging.info("WAIT_UNTIL_TARGET_TIME=0, starting immediately.")
+        return
+
+    now = datetime.now(TARGET_TIMEZONE)
+    target = get_target_datetime()
+
+    if now >= target:
+        logging.info(
+            "Target time already passed. Now=%s Target=%s. Starting immediately.",
+            now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            target.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        )
+        return
+
+    wait_seconds = int((target - now).total_seconds())
+
+    logging.info(
+        "Waiting until target time. Now=%s Target=%s Wait=%s seconds.",
+        now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        target.strftime("%Y-%m-%d %H:%M:%S %Z"),
+        wait_seconds,
+    )
+
+    remaining = wait_seconds
+
+    while remaining > 0:
+        sleep_seconds = min(10, remaining)
+        time.sleep(sleep_seconds)
+        remaining -= sleep_seconds
+
+    logging.info("Target time reached. Starting bot.")
+
+
+def post_multipart(url: str, fields: dict, files: list[tuple[str, str]]) -> None:
+    boundary = uuid.uuid4().hex
+    body = bytearray()
+
+    for name, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(str(value).encode("utf-8"))
+        body.extend(b"\r\n")
+
+    for field_name, file_path in files:
+        path = Path(file_path)
+        filename = path.name
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'.encode("utf-8")
+        )
+        body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+        body.extend(path.read_bytes())
+        body.extend(b"\r\n")
+
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+    request = urllib.request.Request(
+        url,
+        data=bytes(body),
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": DISCORD_USER_AGENT,
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(request, timeout=30) as response:
+        response.read()
+
+
+def format_discord_message(message: str) -> str:
+    lines = message.splitlines()
+
+    if len(lines) <= 1:
+        return message
+
+    first_line = lines[0]
+    rest_lines = lines[1:]
+
+    formatted_rest = "\n".join(
+        f"> {line}" if line.strip() else ">"
+        for line in rest_lines
+    )
+
+    return f"{first_line}\n{formatted_rest}"
+
+
+def notify(message: str, image_path: str | None = None) -> None:
+    if ENABLE_NOTIFY != 1:
+        return
+
+    discord_webhook_url = load_optional_secret_text(DISCORD_WEBHOOK_FILE)
+    telegram_bot_token = load_optional_secret_text(TELEGRAM_BOT_TOKEN_FILE)
+    telegram_chat_id = load_optional_secret_text(TELEGRAM_CHAT_ID_FILE)
+
+    sent = False
+    image_exists = bool(image_path and Path(image_path).exists())
+
+    if discord_webhook_url:
+        try:
+            if image_exists:
+                post_multipart(
+                    discord_webhook_url,
+                    {"payload_json": json.dumps({"content": format_discord_message(message)}, ensure_ascii=False)},
+                    [("file", image_path)],
+                )
+            else:
+                payload = json.dumps({"content": format_discord_message(message)}, ensure_ascii=False).encode("utf-8")
+                request = urllib.request.Request(
+                    discord_webhook_url,
+                    data=payload,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": DISCORD_USER_AGENT,
+                    },
+                    method="POST",
+                )
+
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    response.read()
+
+            logging.info("Discord notification sent.")
+            sent = True
+        except Exception as exc:
+            logging.warning("Discord notification failed: %s", exc)
+
+    if telegram_bot_token and telegram_chat_id:
+        try:
+            if image_exists:
+                url = f"https://api.telegram.org/bot{telegram_bot_token}/sendPhoto"
+                post_multipart(
+                    url,
+                    {
+                        "chat_id": telegram_chat_id,
+                        "caption": message,
+                    },
+                    [("photo", image_path)],
+                )
+            else:
+                url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+                data = urllib.parse.urlencode(
+                    {
+                        "chat_id": telegram_chat_id,
+                        "text": message,
+                    }
+                ).encode("utf-8")
+
+                request = urllib.request.Request(url, data=data, method="POST")
+
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    response.read()
+
+            logging.info("Telegram notification sent.")
+            sent = True
+        except Exception as exc:
+            logging.warning("Telegram notification failed: %s", exc)
+
+    if not sent:
+        logging.info("Notification skipped because no valid notify channel is configured.")
+
+
 def main() -> int:
     logging.info("Starting TikTok Automation Bot...")
 
     try:
         cookie_text = load_cookie_text(COOKIE_FILE)
         cookies = parse_cookies(cookie_text)
+
+        precheck_until_near_target_time(cookies)
+
+        wait_until_scheduled_time()
+
         open_tiktok_with_cookies(cookies)
+
         logging.info("Bot executed successfully.")
+
+        if DEBUG_MODE != 1:
+            notify("✅ TikTok messages sent successfully.")
+
         return 0
+
+    except FileNotFoundError as e:
+        logging.critical(f"Bot failed: {str(e)}")
+
+        if str(COOKIE_FILE) in str(e) or "cookie" in str(e).lower():
+            notify(
+                "❌ TikTok cookie file not found\n"
+                f"Missing file: {COOKIE_FILE}\n"
+                "Please check that the COOKIE secret exists and that cookie.txt is created before running Program.py."
+            )
+        else:
+            notify(
+                "❌ Required file not found\n"
+                f"Error: {str(e)}"
+            )
+
+        return 1
+
+    except ValueError as e:
+        logging.critical(f"Bot failed: {str(e)}")
+
+        if "cookie.txt is empty" in str(e).lower() or "cookie" in str(e).lower():
+            notify(
+                "❌ TikTok cookie file is empty\n"
+                f"File found: {COOKIE_FILE}\n"
+                "cookie.txt exists, but it does not contain any cookie data.\n"
+                "Please check that the COOKIE secret is not empty."
+            )
+        else:
+            notify(
+                "❌ TikTok bot configuration error\n"
+                f"Error: {str(e)}"
+            )
+
+        return 1
+
     except Exception as e:
         logging.critical(f"Bot failed: {str(e)}")
         return 1

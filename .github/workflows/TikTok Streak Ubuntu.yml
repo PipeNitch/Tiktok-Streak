@@ -2,34 +2,51 @@ name: TikTok Daily Streak (Ubuntu)
 
 on:
   schedule:
-    - cron: "0 22 * * *"
+    - cron: "0 19 * * *"
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository code
         uses: actions/checkout@v4
 
-      - name: Create cookie file from secret
+      - name: Create secret files
         env:
           COOKIE_DATA: ${{ secrets.COOKIE }}
+          DISCORD_WEBHOOK_DATA: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN_DATA: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID_DATA: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           cd "$GITHUB_WORKSPACE"
           python3 - <<'PY'
           import os
           from pathlib import Path
 
-          cookie = os.environ.get("COOKIE_DATA", "")
-          if not cookie.strip():
-              raise SystemExit("COOKIE secret is empty or missing")
+          def write_required_secret(env_name, file_name):
+              value = os.environ.get(env_name, "")
+              if not value.strip():
+                  raise SystemExit(f"{env_name} secret is empty or missing")
+              Path(file_name).write_text(value.strip(), encoding="utf-8")
+              print(f"{file_name} created")
+              print(f"{file_name} length:", len(value.strip()))
 
-          Path("cookie.txt").write_text(cookie, encoding="utf-8")
-          print("cookie.txt created")
-          print("cookie length:", len(cookie))
+          def write_optional_secret(env_name, file_name):
+              value = os.environ.get(env_name, "")
+              if value.strip():
+                  Path(file_name).write_text(value.strip(), encoding="utf-8")
+                  print(f"{file_name} created")
+                  print(f"{file_name} length:", len(value.strip()))
+              else:
+                  print(f"{env_name} is empty or missing; skipped {file_name}")
+
+          write_required_secret("COOKIE_DATA", "cookie.txt")
+          write_optional_secret("DISCORD_WEBHOOK_DATA", "discord_webhook.txt")
+          write_optional_secret("TELEGRAM_BOT_TOKEN_DATA", "telegram_bot_token.txt")
+          write_optional_secret("TELEGRAM_CHAT_ID_DATA", "telegram_chat_id.txt")
           PY
 
       - name: Create and Install Python virtual environment
