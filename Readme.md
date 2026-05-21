@@ -2,7 +2,7 @@
 
 Automates sending a daily TikTok DM streak message using Selenium, GitHub Actions, and exported TikTok cookies.
 
-> Original project by **TimeNitch**
+> Original project by **TimeNitch**\
 > Original template: `https://github.com/TimeNitch/Tiktok-Streak`
 
 ## Table of Contents
