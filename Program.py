@@ -3,13 +3,15 @@ import os
 import re
 import sys
 import time
+import random
 import logging
 import threading
 import urllib.parse
 import urllib.request
 import uuid
 import mimetypes
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from selenium import webdriver
@@ -25,35 +27,125 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-DEBUG_MODE = 0
+BASE_DIR = Path(__file__).resolve().parent
 
-MESSAGE_TEXT = os.getenv("TIKTOK_MESSAGE_TEXT", "ข้ามาเติมไฟ🔥")
-WAIT_SECONDS = int(os.getenv("TIKTOK_WAIT_SECONDS", "10"))
+CONFIG_FILE = BASE_DIR / "config.ini"
+TEXT_FILE = BASE_DIR / "text.txt"
+COOKIE_FILE = BASE_DIR / "cookie.txt"
+LOG_FILE = BASE_DIR / "tiktok_bot.log"
 
-ENABLE_NOTIFY = 1
-DISCORD_WEBHOOK_FILE = Path(__file__).with_name("discord_webhook.txt")
-TELEGRAM_BOT_TOKEN_FILE = Path(__file__).with_name("telegram_bot_token.txt")
-TELEGRAM_CHAT_ID_FILE = Path(__file__).with_name("telegram_chat_id.txt")
-
-WAIT_UNTIL_TARGET_TIME = 1
-PRECHECK_BEFORE_WAIT = 1
-
-PRECHECK_INTERVAL_MINUTES = 10
-PRECHECK_STOP_WITHIN_MINUTES = 15
-
-TARGET_RUN_TIME = "06:00"
-TARGET_TIMEZONE = timezone(timedelta(hours=7), name="Asia/Bangkok")
+DISCORD_WEBHOOK_FILE = BASE_DIR / "discord_webhook.txt"
+TELEGRAM_BOT_TOKEN_FILE = BASE_DIR / "telegram_bot_token.txt"
+TELEGRAM_CHAT_ID_FILE = BASE_DIR / "telegram_chat_id.txt"
 
 BASE_URL = "https://www.tiktok.com/messages/?lang=en"
 MESSAGES_URL = "https://www.tiktok.com/messages/?lang=en"
-COOKIE_FILE = Path(__file__).with_name("cookie.txt")
-LOG_FILE = Path(__file__).with_name("tiktok_bot.log")
 
 DISCORD_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/51.0.2704.103 Safari/537.36"
 )
+
+
+def load_config(path: Path) -> dict:
+    config = {}
+
+    if not path.exists():
+        return config
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        if "#" in line:
+            line = line.split("#", 1)[0].strip()
+
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        config[key.strip()] = value.strip()
+
+    return config
+
+
+def get_config_value(config: dict, key: str, default: str) -> str:
+    return config.get(key, os.getenv(key, default)).strip()
+
+
+def get_config_bool(config: dict, key: str, default: bool) -> bool:
+    value = get_config_value(config, key, str(default)).strip().lower()
+
+    if value in {"true", "1", "yes", "y", "on"}:
+        return True
+
+    if value in {"false", "0", "no", "n", "off"}:
+        return False
+
+    raise ValueError(f"Invalid boolean value for {key}: {value}. Use True or False.")
+
+
+def get_config_int(config: dict, key: str, default: int) -> int:
+    value = get_config_value(config, key, str(default))
+    return int(value)
+
+
+def get_config_timezone(config: dict, key: str, default: str):
+    timezone_name = get_config_value(config, key, default)
+
+    try:
+        return ZoneInfo(timezone_name)
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid timezone: {timezone_name}. "
+            "Use an IANA timezone name such as Asia/Bangkok. "
+            "Timezone list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+        ) from exc
+
+
+def load_message_texts(path: Path, default: str) -> list[str]:
+    env_text = os.getenv("TIKTOK_MESSAGE_TEXT", "").strip()
+
+    if env_text:
+        return [line.strip() for line in env_text.splitlines() if line.strip()]
+
+    if not path.exists():
+        return [default]
+
+    lines = [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    if not lines:
+        return [default]
+
+    return lines
+
+
+def get_random_message_text() -> str:
+    return random.choice(MESSAGE_TEXTS)
+
+
+CONFIG = load_config(CONFIG_FILE)
+
+DEBUG_MODE = get_config_bool(CONFIG, "DEBUG_MODE", False)
+ENABLE_NOTIFY = get_config_bool(CONFIG, "ENABLE_NOTIFY", True)
+
+MESSAGE_TEXTS = load_message_texts(TEXT_FILE, "I'm here for the streak🔥")
+WAIT_SECONDS = get_config_int(CONFIG, "TIKTOK_WAIT_SECONDS", 10)
+
+WAIT_UNTIL_TARGET_TIME = get_config_bool(CONFIG, "WAIT_UNTIL_TARGET_TIME", True)
+PRECHECK_BEFORE_WAIT = get_config_bool(CONFIG, "PRECHECK_BEFORE_WAIT", True)
+PRECHECK_INTERVAL_MINUTES = get_config_int(CONFIG, "PRECHECK_INTERVAL_MINUTES", 10)
+PRECHECK_STOP_WITHIN_MINUTES = get_config_int(CONFIG, "PRECHECK_STOP_WITHIN_MINUTES", 15)
+
+TARGET_RUN_TIME = get_config_value(CONFIG, "TARGET_RUN_TIME", "06:00:00")
+TARGET_TIMEZONE = get_config_timezone(CONFIG, "TARGET_TIMEZONE", "Asia/Bangkok")
 
 
 logging.basicConfig(
@@ -590,8 +682,8 @@ def quit_driver(driver: webdriver.Chrome | None) -> None:
 
 
 def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -> list[dict]:
-    if PRECHECK_BEFORE_WAIT != 1:
-        logging.info("PRECHECK_BEFORE_WAIT=0, cookie precheck skipped.")
+    if not PRECHECK_BEFORE_WAIT:
+        logging.info("PRECHECK_BEFORE_WAIT=False, cookie precheck skipped.")
         return []
 
     driver = None
@@ -684,7 +776,7 @@ def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -
                 f"Targets: {len(targets)}"
             )
 
-        if DEBUG_MODE == 1:
+        if DEBUG_MODE:
             log_collected_targets(targets)
 
         try:
@@ -790,7 +882,7 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
 
             raise TimeoutException("No target conversations found")
 
-        if DEBUG_MODE == 1:
+        if DEBUG_MODE:
             log_collected_targets(targets)
 
             target_names = ", ".join(target.get("name", "") for target in targets)
@@ -801,8 +893,7 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
                 f"Names: {target_names}"
             )
 
-            logging.info("DEBUG_MODE=1, message sending skipped.")
-            print("DEBUG_MODE=1, message sending skipped.")
+            logging.info("DEBUG_MODE=True, message sending skipped.")
             return
 
         for index, target in enumerate(targets, start=1):
@@ -819,8 +910,10 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
 
             click_chat_by_target(driver, target)
 
-            logging.info("Sending message to %s: '%s'", target["name"], MESSAGE_TEXT)
-            send_message(driver, MESSAGE_TEXT)
+            message_text = get_random_message_text()
+
+            logging.info("Sending message to %s: '%s'", target["name"], message_text)
+            send_message(driver, message_text)
             logging.info("Sent message to %s", target["name"])
 
             time.sleep(2)
@@ -865,12 +958,16 @@ def get_target_datetime() -> datetime:
 
 
 def precheck_until_near_target_time(cookies: list[dict]) -> None:
-    if PRECHECK_BEFORE_WAIT != 1:
-        logging.info("PRECHECK_BEFORE_WAIT=0, periodic precheck skipped.")
+    if DEBUG_MODE:
+        logging.info("DEBUG_MODE=True, skipping precheck.")
         return
 
-    if WAIT_UNTIL_TARGET_TIME != 1:
-        logging.info("WAIT_UNTIL_TARGET_TIME=0, skipping precheck and starting immediately.")
+    if not PRECHECK_BEFORE_WAIT:
+        logging.info("PRECHECK_BEFORE_WAIT=False, periodic precheck skipped.")
+        return
+
+    if not WAIT_UNTIL_TARGET_TIME:
+        logging.info("WAIT_UNTIL_TARGET_TIME=False, skipping precheck and starting immediately.")
         return
 
     interval_seconds = PRECHECK_INTERVAL_MINUTES * 60
@@ -966,8 +1063,12 @@ def precheck_until_near_target_time(cookies: list[dict]) -> None:
 
 
 def wait_until_scheduled_time() -> None:
-    if WAIT_UNTIL_TARGET_TIME != 1:
-        logging.info("WAIT_UNTIL_TARGET_TIME=0, starting immediately.")
+    if DEBUG_MODE:
+        logging.info("DEBUG_MODE=True, skipping target time wait.")
+        return
+
+    if not WAIT_UNTIL_TARGET_TIME:
+        logging.info("WAIT_UNTIL_TARGET_TIME=False, starting immediately.")
         return
 
     now = datetime.now(TARGET_TIMEZONE)
@@ -1057,7 +1158,7 @@ def format_discord_message(message: str) -> str:
 
 
 def notify(message: str, image_path: str | None = None) -> None:
-    if ENABLE_NOTIFY != 1:
+    if not ENABLE_NOTIFY:
         return
 
     discord_webhook_url = load_optional_secret_text(DISCORD_WEBHOOK_FILE)
@@ -1145,7 +1246,7 @@ def main() -> int:
 
         logging.info("Bot executed successfully.")
 
-        if DEBUG_MODE != 1:
+        if not DEBUG_MODE:
             notify("✅ TikTok messages sent successfully.")
 
         return 0
