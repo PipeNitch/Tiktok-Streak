@@ -57,10 +57,6 @@ Never commit real cookies, Discord webhook URLs, Telegram bot tokens, screenshot
 
 </details>
 
-&emsp;[License](#license)
-
-
-
 ## Features
 
 * Runs automatically with GitHub Actions.
