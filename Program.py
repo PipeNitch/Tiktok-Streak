@@ -1,3 +1,9 @@
+"""
+NAME = "TikTok Daily Streak Bot"
+AUTHOR = "TimeNitch"
+ORIGINAL_REPO = "https://github.com/TimeNitch/Tiktok-Streak"
+"""
+
 import json
 import os
 import re
@@ -10,7 +16,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import mimetypes
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
