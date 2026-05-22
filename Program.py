@@ -522,7 +522,7 @@ def click_chat_by_target(driver: webdriver.Chrome, target: dict) -> None:
     if not clicked:
         raise TimeoutException(f"Could not click target chat: {target_name}")
 
-    time.sleep(2)
+    time.sleep(1)
 
 
 def find_message_box(driver: webdriver.Chrome):
@@ -661,12 +661,12 @@ def send_message(driver: webdriver.Chrome, message: str) -> None:
 
     if click_send_button_if_available(driver):
         logging.info("Clicked send button.")
-        time.sleep(2)
+        time.sleep(1)
         return
 
     logging.warning("Send button not found, trying Enter key.")
     message_box.send_keys(Keys.ENTER)
-    time.sleep(2)
+    time.sleep(1)
 
 
 def quit_driver(driver: webdriver.Chrome | None) -> None:
@@ -912,7 +912,7 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
 
             driver.get(MESSAGES_URL)
             wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(2)
+            time.sleep(1)
 
             click_chat_by_target(driver, target)
 
@@ -922,7 +922,7 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
             send_message(driver, message_text)
             logging.info("Sent message to %s", target["name"])
 
-            time.sleep(2)
+            time.sleep(1)
 
     except Exception as e:
         logging.error(f"Error during execution: {str(e)}", exc_info=True)
