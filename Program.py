@@ -1,7 +1,7 @@
 """
 NAME = "TikTok Daily Streak Bot"
 AUTHOR = "TimeNitch"
-ORIGINAL_REPO = "https://github.com/TimeNitch/Tiktok-Streak"
+ORIGINAL_REPO = "https://github.com/TimeNitch/Tiktok-Streak-Bot-using-cookies"
 """
 
 import json

@@ -5,6 +5,11 @@ on:
     - cron: "0 19 * * *"
   workflow_dispatch:
 
+env:
+  NAME: "TikTok Daily Streak Bot"
+  AUTHOR: "TimeNitch"
+  ORIGINAL_REPO: "https://github.com/TimeNitch/Tiktok-Streak-Bot-using-cookies"
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest

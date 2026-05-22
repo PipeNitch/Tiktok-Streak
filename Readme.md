@@ -17,7 +17,7 @@ Never commit real cookies, Discord webhook URLs, Telegram bot tokens, screenshot
 ---
 
 > Original project by **TimeNitch**\
-> Original repository: `https://github.com/TimeNitch/Tiktok-Streak`
+> Original repository: `https://github.com/TimeNitch/Tiktok-Streak-Bot-using-cookies`
 
 ---
 
