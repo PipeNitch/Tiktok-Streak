@@ -6,3 +6,5 @@ tiktok_bot.log
 *.png
 .idea
 .venv
+
+config.ini

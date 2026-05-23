@@ -687,11 +687,7 @@ def quit_driver(driver: webdriver.Chrome | None) -> None:
         logging.warning("driver.quit() timed out; continuing shutdown")
 
 
-def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -> list[dict]:
-    if not PRECHECK_BEFORE_WAIT:
-        logging.info("PRECHECK_BEFORE_WAIT=False, cookie precheck skipped.")
-        return []
-
+def create_tiktok_driver_with_cookies(cookies: list[dict], log_prefix: str = ""):
     driver = None
     options = Options()
     options.add_argument("--headless=new")
@@ -708,7 +704,6 @@ def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -
     )
 
     try:
-        logging.info("Starting TikTok cookie precheck...")
         driver = webdriver.Chrome(options=options)
 
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
@@ -717,16 +712,18 @@ def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -
 
         wait = WebDriverWait(driver, WAIT_SECONDS)
 
+        logging.info("%sStarting TikTok...", log_prefix)
         driver.get(BASE_URL)
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
+        logging.info("%sDeleting all cookies...", log_prefix)
         driver.delete_all_cookies()
         time.sleep(1)
 
         added = 0
         for cookie in cookies:
             if cookie.get("expiry") and cookie["expiry"] <= int(time.time()):
-                logging.warning(f"Precheck skipped expired cookie {cookie.get('name')}")
+                logging.warning("%sSkipped expired cookie %s", log_prefix, cookie.get("name"))
                 continue
 
             try:
@@ -734,24 +731,50 @@ def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -
                 added += 1
             except (InvalidCookieDomainException, WebDriverException) as exc:
                 logging.warning(
-                    "Precheck skipped cookie name=%s domain=%s path=%s reason=%s",
+                    "%sSkipped cookie name=%s domain=%s path=%s reason=%s",
+                    log_prefix,
                     cookie.get("name"),
                     cookie.get("domain"),
                     cookie.get("path"),
                     exc,
                 )
 
-        logging.info("Precheck added cookies: %s/%s", added, len(cookies))
+        logging.info("%sAdded cookies: %s/%s", log_prefix, added, len(cookies))
 
+        logging.info("%sRefreshing webpage...", log_prefix)
         driver.refresh()
-        time.sleep(3)
+        time.sleep(10)
 
-        logging.info("Precheck directing to messages page...")
+        logging.info("%sDirecting to message: %s", log_prefix, MESSAGES_URL)
         driver.get(MESSAGES_URL)
         wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
 
-        logging.info("Precheck waiting 10 seconds for conversations to load...")
+        logging.info("%sWaiting 10 seconds for conversations to load...", log_prefix)
         time.sleep(10)
+
+        return driver, wait
+
+    except Exception:
+        if driver:
+            quit_driver(driver)
+        raise
+
+
+def precheck_tiktok_cookies(
+    cookies: list[dict],
+    notify_success: bool = False,
+    keep_driver: bool = False,
+) -> tuple[list[dict], webdriver.Chrome | None]:
+    if not PRECHECK_BEFORE_WAIT:
+        logging.info("PRECHECK_BEFORE_WAIT=False, cookie precheck skipped.")
+        return [], None
+
+    driver = None
+    should_quit_driver = True
+
+    try:
+        logging.info("Starting TikTok cookie precheck...")
+        driver, _wait = create_tiktok_driver_with_cookies(cookies, "Precheck ")
 
         logging.info("Precheck collecting target conversations...")
         targets = get_target_conversations(driver)
@@ -791,81 +814,47 @@ def precheck_tiktok_cookies(cookies: list[dict], notify_success: bool = False) -
         except Exception as screenshot_err:
             logging.warning(f"Could not save precheck screenshot: {screenshot_err}")
 
-        return targets
+        if keep_driver:
+            should_quit_driver = False
+            logging.info("Returning precheck browser for reuse decision.")
+            return targets, driver
+
+        return targets, None
 
     except Exception as e:
         logging.error(f"Precheck failed: {str(e)}", exc_info=True)
         raise
 
     finally:
-        if driver:
+        if driver and should_quit_driver:
             quit_driver(driver)
 
 
-def open_tiktok_with_cookies(cookies: list[dict]) -> None:
-    driver = None
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option("useAutomationExtension", False)
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-
+def open_tiktok_with_cookies(
+    cookies: list[dict],
+    driver: webdriver.Chrome | None = None,
+) -> None:
     try:
-        driver = webdriver.Chrome(options=options)
-
-        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-            "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        })
-
-        wait = WebDriverWait(driver, WAIT_SECONDS)
-
-        logging.info("Starting TikTok...")
-        driver.get(BASE_URL)
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-
-        logging.info("Deleting all cookies...")
-        driver.delete_all_cookies()
-        time.sleep(1)
-
-        added = 0
-        for cookie in cookies:
-            if cookie.get("expiry") and cookie["expiry"] <= int(time.time()):
-                logging.warning(f"Skipped expired cookie {cookie.get('name')}")
-                continue
-
+        if driver:
+            logging.info("Using existing TikTok browser from final precheck.")
             try:
-                driver.add_cookie(cookie)
-                added += 1
-            except (InvalidCookieDomainException, WebDriverException) as exc:
+                wait = WebDriverWait(driver, WAIT_SECONDS)
+                logging.info("Refreshing existing messages page before final run...")
+                driver.get(MESSAGES_URL)
+                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                driver.refresh()
+                wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+                time.sleep(10)
+            except WebDriverException as exc:
                 logging.warning(
-                    "Skipped cookie name=%s domain=%s path=%s reason=%s",
-                    cookie.get("name"),
-                    cookie.get("domain"),
-                    cookie.get("path"),
+                    "Existing TikTok browser could not be reused: %s. Opening a new browser.",
                     exc,
                 )
-
-        logging.info(f"Added cookies: {added}/{len(cookies)}")
-
-        logging.info("Refreshing webpage...")
-        driver.refresh()
-        time.sleep(3)
-
-        logging.info(f"Directing to message: {MESSAGES_URL}")
-        driver.get(MESSAGES_URL)
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-
-        logging.info("Waiting 10 seconds for conversations to load...")
-        time.sleep(10)
+                quit_driver(driver)
+                driver = None
+                driver, wait = create_tiktok_driver_with_cookies(cookies)
+        else:
+            driver, wait = create_tiktok_driver_with_cookies(cookies)
 
         logging.info("Collecting target conversations...")
         targets = get_target_conversations(driver)
@@ -909,10 +898,6 @@ def open_tiktok_with_cookies(cookies: list[dict]) -> None:
                 len(targets),
                 target["name"],
             )
-
-            driver.get(MESSAGES_URL)
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            time.sleep(1)
 
             click_chat_by_target(driver, target)
 
@@ -963,18 +948,18 @@ def get_target_datetime() -> datetime:
     )
 
 
-def precheck_until_near_target_time(cookies: list[dict]) -> None:
+def precheck_until_near_target_time(cookies: list[dict]) -> webdriver.Chrome | None:
     if DEBUG_MODE:
         logging.info("DEBUG_MODE=True, skipping precheck.")
-        return
+        return None
 
     if not PRECHECK_BEFORE_WAIT:
         logging.info("PRECHECK_BEFORE_WAIT=False, periodic precheck skipped.")
-        return
+        return None
 
     if not WAIT_UNTIL_TARGET_TIME:
         logging.info("WAIT_UNTIL_TARGET_TIME=False, skipping precheck and starting immediately.")
-        return
+        return None
 
     interval_seconds = PRECHECK_INTERVAL_MINUTES * 60
     stop_within_seconds = PRECHECK_STOP_WITHIN_MINUTES * 60
@@ -993,7 +978,7 @@ def precheck_until_near_target_time(cookies: list[dict]) -> None:
                 now.strftime("%Y-%m-%d %H:%M:%S %Z"),
                 target.strftime("%Y-%m-%d %H:%M:%S %Z"),
             )
-            return
+            return None
 
         if remaining_seconds <= stop_within_seconds:
             logging.info(
@@ -1001,7 +986,7 @@ def precheck_until_near_target_time(cookies: list[dict]) -> None:
                 remaining_seconds,
                 stop_within_seconds,
             )
-            return
+            return None
 
         precheck_round += 1
         precheck_start = datetime.now(TARGET_TIMEZONE)
@@ -1014,7 +999,11 @@ def precheck_until_near_target_time(cookies: list[dict]) -> None:
             remaining_seconds,
         )
 
-        precheck_tiktok_cookies(cookies, notify_success=(precheck_round == 1))
+        _targets, precheck_driver = precheck_tiktok_cookies(
+            cookies,
+            notify_success=(precheck_round == 1),
+            keep_driver=True,
+        )
 
         precheck_end = datetime.now(TARGET_TIMEZONE)
         precheck_duration_seconds = int((precheck_end - precheck_start).total_seconds())
@@ -1032,10 +1021,10 @@ def precheck_until_near_target_time(cookies: list[dict]) -> None:
 
         if remaining_seconds <= stop_within_seconds:
             logging.info(
-                "Target time is now near. Remaining=%s seconds. Waiting for target time.",
+                "Target time is now near. Remaining=%s seconds. Keeping browser open for target time.",
                 remaining_seconds,
             )
-            return
+            return precheck_driver
 
         next_precheck_time = first_precheck_start + timedelta(
             seconds=precheck_round * interval_seconds
@@ -1045,11 +1034,13 @@ def precheck_until_near_target_time(cookies: list[dict]) -> None:
 
         if next_precheck_time > latest_allowed_precheck_time:
             logging.info(
-                "Next precheck time would be too close to target. Next=%s LatestAllowed=%s. Waiting for target time.",
+                "Next precheck time would be too close to target. Next=%s LatestAllowed=%s. Keeping browser open for target time.",
                 next_precheck_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
                 latest_allowed_precheck_time.strftime("%Y-%m-%d %H:%M:%S %Z"),
             )
-            return
+            return precheck_driver
+
+        quit_driver(precheck_driver)
 
         sleep_seconds = int((next_precheck_time - datetime.now(TARGET_TIMEZONE)).total_seconds())
 
@@ -1244,11 +1235,11 @@ def main() -> int:
         cookie_text = load_cookie_text(COOKIE_FILE)
         cookies = parse_cookies(cookie_text)
 
-        precheck_until_near_target_time(cookies)
+        driver = precheck_until_near_target_time(cookies)
 
         wait_until_scheduled_time()
 
-        open_tiktok_with_cookies(cookies)
+        open_tiktok_with_cookies(cookies, driver=driver)
 
         logging.info("Bot executed successfully.")
 
