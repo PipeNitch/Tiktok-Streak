@@ -408,15 +408,39 @@ def find_visible_elements(driver: webdriver.Chrome, xpath: str) -> list:
 def get_target_conversations(driver: webdriver.Chrome) -> list[dict]:
     targets = driver.execute_script(
         """
-        const items = [...document.querySelectorAll('[data-e2e="dm-new-conversation-item"]')]
-            .filter(el => String(el.className).includes("css-1b0rjvj"));
+        const pinPathD = "M31.6 3.67a3 3 0 0 0-4.24 0l-.7.7";
 
-        return items
+        const pinnedItems = [...document.querySelectorAll("path")]
+            .filter(path => path.getAttribute("d")?.startsWith(pinPathD))
+            .map(path => {
+                return path.closest('[data-e2e="dm-new-conversation-item"]')
+                    || path.closest('[data-index]')
+                    || path.closest('div');
+            })
+            .filter(Boolean);
+
+        const uniqueItems = [];
+        const seen = new Set();
+
+        for (const el of pinnedItems) {
+            const key = el.id || el.getAttribute("data-index") || el.outerHTML.slice(0, 200);
+
+            if (seen.has(key)) {
+                continue;
+            }
+
+            seen.add(key);
+            uniqueItems.push(el);
+        }
+
+        return uniqueItems
             .map((el, index) => {
                 const nameEl = el.querySelector('[data-e2e="dm-new-conversation-nickname"]');
+
                 return {
                     index,
                     id: el.id || "",
+                    dataIndex: el.getAttribute("data-index") || "",
                     name: nameEl ? nameEl.textContent.trim() : ""
                 };
             })
@@ -465,23 +489,51 @@ def log_collected_targets(targets: list[dict]) -> None:
 def click_chat_by_target(driver: webdriver.Chrome, target: dict) -> None:
     target_id = target.get("id", "")
     target_name = target.get("name", "")
+    target_data_index = target.get("dataIndex", "")
 
     clicked = driver.execute_script(
         """
         const targetId = arguments[0];
         const targetName = arguments[1];
+        const targetDataIndex = arguments[2];
 
-        const items = [...document.querySelectorAll('[data-e2e="dm-new-conversation-item"]')]
-            .filter(el => String(el.className).includes("css-1b0rjvj"));
+        const pinPathD = "M31.6 3.67a3 3 0 0 0-4.24 0l-.7.7";
+
+        const pinnedItems = [...document.querySelectorAll("path")]
+            .filter(path => path.getAttribute("d")?.startsWith(pinPathD))
+            .map(path => {
+                return path.closest('[data-e2e="dm-new-conversation-item"]')
+                    || path.closest('[data-index]')
+                    || path.closest('div');
+            })
+            .filter(Boolean);
+
+        const uniqueItems = [];
+        const seen = new Set();
+
+        for (const el of pinnedItems) {
+            const key = el.id || el.getAttribute("data-index") || el.outerHTML.slice(0, 200);
+
+            if (seen.has(key)) {
+                continue;
+            }
+
+            seen.add(key);
+            uniqueItems.push(el);
+        }
 
         let item = null;
 
         if (targetId) {
-            item = items.find(el => el.id === targetId);
+            item = uniqueItems.find(el => el.id === targetId);
+        }
+
+        if (!item && targetDataIndex) {
+            item = uniqueItems.find(el => el.getAttribute("data-index") === targetDataIndex);
         }
 
         if (!item && targetName) {
-            item = items.find(el => {
+            item = uniqueItems.find(el => {
                 const nameEl = el.querySelector('[data-e2e="dm-new-conversation-nickname"]');
                 return nameEl && nameEl.textContent.trim() === targetName;
             });
@@ -517,6 +569,7 @@ def click_chat_by_target(driver: webdriver.Chrome, target: dict) -> None:
         """,
         target_id,
         target_name,
+        target_data_index,
     )
 
     if not clicked:
